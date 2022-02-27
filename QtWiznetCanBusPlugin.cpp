@@ -20,32 +20,32 @@ public:
 
         std::cout << "interfaceName " << interfaceName.toStdString().c_str() << std::endl;
 
-        auto tokens = interfaceName.split(QChar(','));
-        if (tokens.size() != 3)
+        auto tokens = interfaceName.split(QChar(':'));
+        if (tokens.size() != 2)
         {
             *errorMessage = "Invalid interface name format";
             return nullptr;
         }
         bool ok;
-        const auto quint16max = std::numeric_limits<quint16>::max();
-        auto localPort = tokens[0].toUInt(&ok);
-        if (!ok || localPort > quint16max)
-        {
-            *errorMessage = "Invalid local port format";
-            return nullptr;
-        }
-        QHostAddress remoteAddr(tokens[1]);
+
+        QHostAddress remoteAddr(tokens[0]);
         if (remoteAddr.isNull())
         {
             *errorMessage = "Invalid remote address format";
             return nullptr;
         }
-        auto remotePort = tokens[2].toUInt(&ok);
+
+        const auto quint16max = std::numeric_limits<quint16>::max();
+        auto remotePort = tokens[1].toUInt(&ok);
         if (!ok || remotePort > quint16max)
         {
             *errorMessage = "Invalid remote port format";
             return nullptr;
         }
+
+        auto localPort = remotePort + 1;
+
+        qDebug() << remoteAddr.toString();
 
         return new WiznetCanBackend(localPort, remoteAddr, remotePort);
     }

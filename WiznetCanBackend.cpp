@@ -94,17 +94,23 @@ QString WiznetCanBackend::interpretErrorFrame(const QCanBusFrame&)
 
 bool WiznetCanBackend::open()
 {
-#if 0
+#if 1
     Q_ASSERT(!sock_.isOpen());
     if (!sock_.bind(QHostAddress::LocalHost, localPort_))
     {
         setState(QCanBusDevice::UnconnectedState);
         return false;
     }
+    qDebug() << "sock_.bind(QHostAddress::LocalHost, localPort_)";
+
     connect(&sock_, &QAbstractSocket::readyRead, this,
             &WiznetCanBackend::dataAvailable);
     setState(QCanBusDevice::ConnectedState);
     timerId_ = startTimer(OUTGOING_QUEUE_TIMEOUT_MSEC);
+
+    qDebug() << "connect()";
+
+    sock_.writeDatagram("open", 5, remoteAddr_, remotePort_);
 #endif
     return true;
 }
@@ -144,7 +150,8 @@ void WiznetCanBackend::dataAvailable()
 void WiznetCanBackend::timerEvent(QTimerEvent* ev)
 {
     Q_ASSERT(ev->timerId() == timerId_);
-    qDebug() << "CannelloniCanBackend output timer fired";
+    //qDebug() << "WiznetCanBackend output timer fired";
+
     auto f = dequeueOutgoingFrame();
     // send every CAN frame as a separate Cannelloni packet. CAN frames can
     // only be at most 64 bytes in length (in case of CANFD), so let's give the
@@ -171,6 +178,14 @@ void WiznetCanBackend::timerEvent(QTimerEvent* ev)
         f = dequeueOutgoingFrame();
         ++framesSent;
         totalBytes += (end - buf);
+#else
+        const char *send_str = "send can\n";
+
+        sock_.writeDatagram(send_str, strlen(send_str)+1,
+                            remoteAddr_, remotePort_);
+
+        f = dequeueOutgoingFrame();
+        ++framesSent;
 #endif
     }
     if (framesSent)
@@ -179,7 +194,7 @@ void WiznetCanBackend::timerEvent(QTimerEvent* ev)
         // bytesWritten()...
         emit framesWritten(framesSent);
     }
-    qDebug() << "Wrote" << totalBytes << "bytes and" << framesSent << "frames";
+    //qDebug() << "Wrote" << totalBytes << "bytes and" << framesSent << "frames";
 }
 
 void WiznetCanBackend::handlePacket(const QByteArray& data)
@@ -199,6 +214,18 @@ void WiznetCanBackend::handlePacket(const QByteArray& data)
     parseFrames(static_cast<uint16_t>(data.length()),
                 reinterpret_cast<const uint8_t*>(data.constData()), allocator,
                 receiver);
+
+    qDebug() << "Received" << newFrames.size() << "new frames";
+    enqueueReceivedFrames(newFrames);
+#else
+    qDebug() << "Received valid datagram, size =" << data.size();
+
+    QVector<QCanBusFrame> newFrames;
+
+    QCanBusFrame frame;
+    frame.setFrameId(0x11);
+    frame.setPayload(data);
+    newFrames.push_back(frame);
 
     qDebug() << "Received" << newFrames.size() << "new frames";
     enqueueReceivedFrames(newFrames);
