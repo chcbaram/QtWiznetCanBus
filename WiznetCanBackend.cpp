@@ -1,6 +1,8 @@
 #include "WiznetCanBackend.h"
 #include <QNetworkDatagram>
 #include <QTimerEvent>
+#include <QDateTime>
+
 
 namespace
 {
@@ -9,69 +11,93 @@ const unsigned long OUTGOING_QUEUE_TIMEOUT_MSEC = 50;
 const unsigned long MAX_BYTES_PER_TIMEOUT =
     MAX_BYTES_PER_SEC / (1000 / OUTGOING_QUEUE_TIMEOUT_MSEC);
 
-#if 0
-QCanBusFrame convert(const canfd_frame& frame)
+#if 1
+QCanBusFrame convert(const can_msg_t& frame)
 {
     QCanBusFrame f;
-    if (frame.can_id & CAN_ERR_FLAG)
-        f.setFrameType(QCanBusFrame::ErrorFrame);
-    else if (frame.can_id & CAN_RTR_FLAG)
-        f.setFrameType(QCanBusFrame::RemoteRequestFrame);
 
-    if (frame.can_id & CAN_EFF_FLAG)
+    if (frame.frame_type == CAN_FRAME_TYPE_ERROR)
+        f.setFrameType(QCanBusFrame::ErrorFrame);
+    else if (frame.frame_type & CAN_FRAME_TYPE_REMOTE)
+        f.setFrameType(QCanBusFrame::RemoteRequestFrame);
+    else
+        f.setFrameType(QCanBusFrame::DataFrame);
+
+
+    if (frame.id_type == CAN_EXT)
         f.setExtendedFrameFormat(true);
     else
         f.setExtendedFrameFormat(false);
 
-    f.setFrameId(frame.can_id);
-    f.setFlexibleDataRateFormat(true);
+    f.setFrameId(frame.id);
+    f.setFlexibleDataRateFormat(false);
 
     QByteArray a;
-    a.append(reinterpret_cast<const char*>(frame.data), frame.len);
+    a.append(reinterpret_cast<const char*>(frame.data), frame.length);
     f.setPayload(a);
     return f;
 }
 
-canfd_frame convert(const QCanBusFrame& qtFrame)
+can_msg_t convert(const QCanBusFrame& qtFrame)
 {
-    canfd_frame frame;
-    frame.can_id = qtFrame.frameId();
+    can_msg_t frame;
+    frame.id = qtFrame.frameId();
+
 
     switch (qtFrame.frameType())
     {
     case QCanBusFrame::ErrorFrame:
-        frame.can_id |= CAN_ERR_FLAG;
+        frame.frame_type = CAN_FRAME_TYPE_ERROR;
         break;
 
     case QCanBusFrame::RemoteRequestFrame:
-        frame.can_id |= CAN_RTR_FLAG;
+        frame.frame_type = CAN_FRAME_TYPE_REMOTE;
         break;
 
     default:
+        frame.frame_type = CAN_FRAME_TYPE_DATA;
         break;
     }
 
+
     if (qtFrame.hasExtendedFrameFormat())
     {
-        frame.can_id |= CAN_EFF_FLAG;
+        frame.id_type = CAN_EXT;
     }
     else
     {
-        frame.can_id &= ~(CAN_EFF_FLAG);
+        frame.id_type = CAN_STD;
     }
     auto payload = qtFrame.payload();
 
     // frames with a larger length should be discarded by base QCanBusFrame code
     // as invalid.
-    Q_ASSERT(payload.size() <= sizeof(frame.data));
+    Q_ASSERT(payload.size() <= (int)sizeof(frame.data));
 
     memcpy(frame.data, payload.data(), payload.size());
-    frame.len = payload.size();
+    frame.length = payload.size();
 
     return frame;
 }
 #endif
+
 } // namespace
+
+
+uint32_t canDriverAvailable(void *p_arg) { return ((WiznetCanBackend *)p_arg)->canDriverAvailable(); }
+bool     canDriverFlush(void *p_arg)     { return ((WiznetCanBackend *)p_arg)->canDriverFlush(); }
+uint8_t  canDriverRead(void *p_arg)      { return ((WiznetCanBackend *)p_arg)->canDriverRead(); }
+uint32_t canDriverWrite(void *p_arg, uint8_t *p_data, uint32_t length) { return ((WiznetCanBackend *)p_arg)->canDriverWrite(p_data, length); }
+
+
+
+QList<QCanBusDeviceInfo> WiznetCanBackend::interfaces()
+{
+    QList<QCanBusDeviceInfo> result;
+    result.append(createDeviceInfo(QStringLiteral("127.0.0.1:30000")));
+    return result;
+}
+
 
 WiznetCanBackend::WiznetCanBackend(quint16 localPort,
                                            const QHostAddress& remoteAddr,
@@ -79,6 +105,17 @@ WiznetCanBackend::WiznetCanBackend(quint16 localPort,
     : localPort_(localPort), remoteAddr_(remoteAddr), remotePort_(remotePort),
       timerId_(0)
 {
+    cmd_can_driver.p_arg = (void *)this;
+    cmd_can_driver.available = ::canDriverAvailable;
+    cmd_can_driver.flush = ::canDriverFlush;
+    cmd_can_driver.read = ::canDriverRead;
+    cmd_can_driver.write = ::canDriverWrite;
+
+    cmdCanInit(&cmd_can, &cmd_can_driver);
+    cmdCanOpen(&cmd_can);
+    qbufferCreate(&cmd_can_q, cmd_can_buf, 512*1024);
+
+    offset_time = -1;
 }
 
 bool WiznetCanBackend::writeFrame(const QCanBusFrame& frame)
@@ -94,7 +131,6 @@ QString WiznetCanBackend::interpretErrorFrame(const QCanBusFrame&)
 
 bool WiznetCanBackend::open()
 {
-#if 1
     Q_ASSERT(!sock_.isOpen());
     if (!sock_.bind(QHostAddress::LocalHost, localPort_))
     {
@@ -108,10 +144,12 @@ bool WiznetCanBackend::open()
     setState(QCanBusDevice::ConnectedState);
     timerId_ = startTimer(OUTGOING_QUEUE_TIMEOUT_MSEC);
 
+    sock_.connectToHost(remoteAddr_,remotePort_);
+
     qDebug() << "connect()";
 
-    sock_.writeDatagram("open", 5, remoteAddr_, remotePort_);
-#endif
+    cmdCanSendType(&cmd_can, PKT_TYPE_PING, NULL, 0);
+
     return true;
 }
 
@@ -179,10 +217,13 @@ void WiznetCanBackend::timerEvent(QTimerEvent* ev)
         ++framesSent;
         totalBytes += (end - buf);
 #else
-        const char *send_str = "send can\n";
+        //const char *send_str = "send can\n";
+        //sock_.writeDatagram(send_str, strlen(send_str)+1,remoteAddr_, remotePort_);
 
-        sock_.writeDatagram(send_str, strlen(send_str)+1,
-                            remoteAddr_, remotePort_);
+        can_msg_t can_msg;
+
+        can_msg = convert(f);
+        cmdCanSendType(&cmd_can, PKT_TYPE_CAN, (uint8_t *)&can_msg, sizeof(can_msg));
 
         f = dequeueOutgoingFrame();
         ++framesSent;
@@ -218,16 +259,69 @@ void WiznetCanBackend::handlePacket(const QByteArray& data)
     qDebug() << "Received" << newFrames.size() << "new frames";
     enqueueReceivedFrames(newFrames);
 #else
-    qDebug() << "Received valid datagram, size =" << data.size();
+    //qDebug() << "Received valid datagram, size =" << data.size();
 
-    QVector<QCanBusFrame> newFrames;
+    qbufferWrite(&cmd_can_q, (uint8_t *)data.data(), data.size());
 
-    QCanBusFrame frame;
-    frame.setFrameId(0x11);
-    frame.setPayload(data);
-    newFrames.push_back(frame);
+    while(qbufferAvailable(&cmd_can_q) > 0)
+    {
+        if (cmdCanReceivePacket(&cmd_can) == true)
+        {
+            if (cmd_can.rx_packet.type == PKT_TYPE_CAN)
+            {
+                QVector<QCanBusFrame> newFrames;
 
-    qDebug() << "Received" << newFrames.size() << "new frames";
-    enqueueReceivedFrames(newFrames);
+                QCanBusFrame frame;
+                can_msg_t can_msg;
+
+                memcpy(&can_msg, cmd_can.rx_packet.data, sizeof(can_msg));
+
+
+                QByteArray frame_data = QByteArray(reinterpret_cast<char *>(can_msg.data), can_msg.length);
+                QDateTime current_time = QDateTime::currentDateTime();
+
+                if (offset_time < 0)
+                {
+                    offset_time = current_time.currentMSecsSinceEpoch();
+                }
+                qint64 time_msec = current_time.currentMSecsSinceEpoch() - offset_time;
+
+                frame.setTimeStamp(QCanBusFrame::TimeStamp(time_msec/1000, (time_msec%1000)*1000));
+                frame.setFrameId(can_msg.id);
+                frame.setPayload(frame_data);
+                newFrames.push_back(frame);
+                enqueueReceivedFrames(newFrames);
+            }
+        }
+    }
 #endif
 }
+
+uint32_t WiznetCanBackend::canDriverAvailable(void)
+{
+    return qbufferAvailable(&cmd_can_q);
+}
+
+bool WiznetCanBackend::canDriverFlush(void)
+{
+    qbufferFlush(&cmd_can_q);
+    return true;
+}
+
+uint8_t WiznetCanBackend::canDriverRead(void)
+{
+    uint8_t ret;
+
+    qbufferRead(&cmd_can_q, &ret, 1);
+    return ret;
+}
+
+uint32_t WiznetCanBackend::canDriverWrite(uint8_t *p_data, uint32_t length)
+{
+    uint32_t ret = 0;
+
+    ret = sock_.writeDatagram((const char *)p_data, length, remoteAddr_, remotePort_);
+
+    return ret;
+}
+

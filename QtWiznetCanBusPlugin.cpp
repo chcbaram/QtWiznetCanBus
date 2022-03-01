@@ -7,13 +7,19 @@
 #include <iostream>
 
 
-class QtWiznetCanBusPlugin : public QObject, public QCanBusFactory
+class QtWiznetCanBusPlugin : public QObject, public QCanBusFactoryV2
 {
     Q_OBJECT
     Q_PLUGIN_METADATA(IID "org.qt-project.Qt.QCanBusFactory" FILE "plugin.json")
-    Q_INTERFACES(QCanBusFactory)
+    Q_INTERFACES(QCanBusFactoryV2)
 
-public:
+public:    
+    QList<QCanBusDeviceInfo> availableDevices(QString *errorMessage) const override
+    {
+        Q_UNUSED(errorMessage);
+        return WiznetCanBackend::interfaces();
+    }
+
     QCanBusDevice* createDevice(const QString& interfaceName,
                                 QString* errorMessage) const override
     {
