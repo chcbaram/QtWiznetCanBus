@@ -46,7 +46,7 @@ typedef enum
   CAN_FRAME_TYPE_DATA,
   CAN_FRAME_TYPE_ERROR,
   CAN_FRAME_TYPE_REMOTE,
-} CanFrameType_t;
+} can_frame_type_t;
 
 typedef enum
 {
@@ -93,7 +93,7 @@ typedef struct
   uint8_t  id_type;       // can_id_type_t
   uint8_t  dlc;           // can_dlc_t
   uint8_t  frame;         // can_frame_t
-  uint8_t  frame_type;    // CanFrameType_t
+  uint8_t  frame_type;    // can_frame_type_t
 
   uint8_t  data[64];
 } can_msg_t;
