@@ -94,8 +94,9 @@ uint32_t canDriverWrite(void *p_arg, uint8_t *p_data, uint32_t length) { return 
 QList<QCanBusDeviceInfo> WiznetCanBackend::interfaces()
 {
     QList<QCanBusDeviceInfo> result;
-    result.append(createDeviceInfo(QStringLiteral("127.0.0.1:30000")));
-    result.append(createDeviceInfo(QStringLiteral("172.30.1.54:30000")));
+    result.append(createDeviceInfo(QStringLiteral("127.0.0.1:4444")));
+    result.append(createDeviceInfo(QStringLiteral("172.30.1.54:4444")));
+    result.append(createDeviceInfo(QStringLiteral("192.168.44.4:4444")));
     return result;
 }
 
