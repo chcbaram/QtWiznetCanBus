@@ -95,6 +95,7 @@ QList<QCanBusDeviceInfo> WiznetCanBackend::interfaces()
 {
     QList<QCanBusDeviceInfo> result;
     result.append(createDeviceInfo(QStringLiteral("127.0.0.1:30000")));
+    result.append(createDeviceInfo(QStringLiteral("172.30.1.54:30000")));
     return result;
 }
 
@@ -132,7 +133,7 @@ QString WiznetCanBackend::interpretErrorFrame(const QCanBusFrame&)
 bool WiznetCanBackend::open()
 {
     Q_ASSERT(!sock_.isOpen());
-    if (!sock_.bind(QHostAddress::LocalHost, localPort_))
+    if (!sock_.bind(QHostAddress::AnyIPv4, localPort_))
     {
         setState(QCanBusDevice::UnconnectedState);
         return false;
@@ -147,6 +148,7 @@ bool WiznetCanBackend::open()
     sock_.connectToHost(remoteAddr_,remotePort_);
 
     qDebug() << "connect()";
+
 
     cmdCanSendType(&cmd_can, PKT_TYPE_PING, NULL, 0);
 
